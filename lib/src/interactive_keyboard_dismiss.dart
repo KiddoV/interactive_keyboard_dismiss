@@ -162,6 +162,8 @@ class InteractiveKeyboardDismiss extends StatefulWidget {
     this.controller,
     this.thresholds = const KeyboardDismissThresholds(),
     this.requireScrollGesture = true,
+    this.allowDragFromAbove = false,
+    this.dragFromAboveDistance = 70,
     this.unfocusOnDismiss = true,
     this.adjustMediaQuery = true,
     this.onDismissed,
@@ -190,6 +192,19 @@ class InteractiveKeyboardDismiss extends StatefulWidget {
   /// iOS ignores this flag: UIKit tracks every vertical drag that starts
   /// inside this widget's area, so the widget follows all of them.
   final bool requireScrollGesture;
+
+  /// When true, a drag that starts above the keyboard (for example on the
+  /// input bar) starts tracking the keyboard at once, and the keyboard
+  /// follows the finger from the first pixel. When false (default) the
+  /// keyboard only starts moving once the finger crosses its top edge.
+  final bool allowDragFromAbove;
+
+  /// How far (logical px) above the keyboard's top edge the input bar
+  /// reaches when [allowDragFromAbove] is true. A drag that reaches within
+  /// this distance of the keyboard is a keyboard drag; farther up is a
+  /// list scroll and the keyboard stays put. Set it to the input bar's
+  /// height (default 70 covers a typical one).
+  final double dragFromAboveDistance;
 
   /// When true (default) a dismiss unfocuses the primary focus. When false
   /// the keyboard is hidden with `TextInput.hide` and focus is kept (Android;
@@ -232,6 +247,9 @@ class _InteractiveKeyboardDismissState extends State<InteractiveKeyboardDismiss>
 
   double _startHeight = 0;
   double _keyboardTop = 0;
+  double _dragStartY = 0;
+  double _pointerStartY = 0;
+  bool _fromAbove = false;
   int _generation = 0;
   KeyboardControlSession? _session;
   ({double velocity, bool forceRestore})? _pendingRelease;
@@ -359,6 +377,7 @@ class _InteractiveKeyboardDismissState extends State<InteractiveKeyboardDismiss>
     if (!_active || _pointer != null) return;
     if (_controller.phase != KeyboardDragPhase.idle) return;
     _pointer = event.pointer;
+    _pointerStartY = event.position.dy;
     _pointerConsumed = false;
     // On iOS the system tracks every vertical drag in the registered region,
     // so the Dart side must follow all of them to stay in sync.
@@ -407,8 +426,19 @@ class _InteractiveKeyboardDismissState extends State<InteractiveKeyboardDismiss>
         final double height = _rawKeyboardHeight;
         if (height <= 0) return;
         final double top = _viewHeight - height;
-        if (pointerY <= top) return;
-        _startInteraction(height: height, top: top);
+        // The finger must be in the input-bar zone (or on the keyboard) to
+        // start. A drag that starts far up is a list scroll until the
+        // finger reaches the bar; then it becomes a keyboard drag. Measure
+        // from the drag start when it started on the bar, else from where
+        // the finger entered the zone, so the offset is 0 on arrival.
+        final double zoneTop = widget.allowDragFromAbove
+            ? top - widget.dragFromAboveDistance
+            : top;
+        if (pointerY <= zoneTop) return;
+        final bool startedInZone =
+            widget.allowDragFromAbove && _pointerStartY > zoneTop;
+        final double origin = startedInZone ? _pointerStartY : pointerY;
+        _startInteraction(height: height, top: top, startPointerY: origin);
         _applyPointer(pointerY);
       case KeyboardDragPhase.dragging:
         _applyPointer(pointerY);
@@ -419,11 +449,18 @@ class _InteractiveKeyboardDismissState extends State<InteractiveKeyboardDismiss>
   }
 
   void _applyPointer(double pointerY) {
-    final double offset = keyboardOffsetForPointer(
-      pointerY: pointerY,
-      keyboardTop: _keyboardTop,
-      height: _startHeight,
-    );
+    // Pure pointer position: a drag that starts above the keyboard has no
+    // meaningful absolute offset (the pointer is above the top, so the
+    // absolute formula returns 0); follow the distance the finger has
+    // traveled since the drag started instead, so the keyboard moves from
+    // the first pixel.
+    final double offset = _fromAbove
+        ? (pointerY - _dragStartY).clamp(0.0, _startHeight).toDouble()
+        : keyboardOffsetForPointer(
+            pointerY: pointerY,
+            keyboardTop: _keyboardTop,
+            height: _startHeight,
+          );
     _controller._set(offset: offset);
     if (_session?.started ?? false) {
       unawaited(_channel.update(offset / _startHeight));
@@ -432,9 +469,15 @@ class _InteractiveKeyboardDismissState extends State<InteractiveKeyboardDismiss>
 
   // ------------------------------------------------------------- lifecycle
 
-  void _startInteraction({required double height, required double top}) {
+  void _startInteraction({
+    required double height,
+    required double top,
+    required double startPointerY,
+  }) {
     _startHeight = height;
     _keyboardTop = top;
+    _dragStartY = startPointerY;
+    _fromAbove = startPointerY <= top;
     _session = null;
     _pendingRelease = null;
     _spring.stop();

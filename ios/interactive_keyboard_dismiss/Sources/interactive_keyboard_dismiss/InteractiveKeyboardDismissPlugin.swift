@@ -121,7 +121,8 @@ public class InteractiveKeyboardDismissPlugin: NSObject, FlutterPlugin {
       sv.alpha = 0
       sv.frame = view.bounds
       sv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      sv.contentSize = CGSize(width: 1, height: 1)
+      sv.contentSize = CGSize(width: 1, height: KeyboardPanScrollView.contentHeight)
+      sv.contentOffset = CGPoint(x: 0, y: KeyboardPanScrollView.restOffset)
       view.insertSubview(sv, at: 0)
       let pan = sv.panGestureRecognizer
       pan.cancelsTouchesInView = false
@@ -146,7 +147,8 @@ public class InteractiveKeyboardDismissPlugin: NSObject, FlutterPlugin {
     case .ended, .cancelled, .failed:
       guard panActive else { return }
       panActive = false
-      scrollView?.setContentOffset(.zero, animated: false)
+      scrollView?.setContentOffset(
+        CGPoint(x: 0, y: KeyboardPanScrollView.restOffset), animated: false)
       if hideSeenDuringPan {
         decide(dismissed: true)
       } else {
@@ -242,7 +244,17 @@ public class InteractiveKeyboardDismissPlugin: NSObject, FlutterPlugin {
 
 /// The invisible scroll view whose pan recognizer lives on the FlutterView.
 /// It only lets the pan begin inside regions registered from Dart.
+///
+/// The scroll view carries a tall content size parked in the middle, so a
+/// drag scrolls 1:1 with the finger instead of rubber-band bouncing (a 1x1
+/// content can only bounce, which moves the keyboard less than the finger
+/// and lets the Dart layout outrun it). The content is empty and the view
+/// is invisible, so the size is only a tracking range.
 final class KeyboardPanScrollView: UIScrollView {
+  /// Total content height; the offset rests at half of it.
+  static let contentHeight: CGFloat = 10000
+  /// Resting offset, in the middle of the content.
+  static let restOffset: CGFloat = contentHeight / 2
   weak var hostView: UIView?
   var regions: [CGRect] = []
 
